@@ -1,5 +1,5 @@
 use tokio::signal;
-use tracing::{dispatcher, Dispatch, Level};
+use tracing::{Dispatch, Level, dispatcher};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Registry};
 

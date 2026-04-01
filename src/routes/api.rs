@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use axum::extract::{Query, Request, State};
 use axum::Json;
+use axum::extract::{Query, Request, State};
 
+use crate::AppState;
 use crate::db_client::{RepoFilter, RepoTotals};
 use crate::types::JsonRes;
-use crate::AppState;
 
 #[derive(Debug, serde::Serialize)]
 pub struct ReposList {

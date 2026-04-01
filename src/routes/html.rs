@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, Request, State};
-use maud::{html, Markup, PreEscaped};
+use maud::{Markup, PreEscaped, html};
 use thousands::Separable;
 
+use crate::AppState;
 use crate::db_client::{
   DbClient, Direction, PopularFilter, PopularKind, PopularSort, RepoFilter, RepoSort, RepoTotals,
 };
 use crate::helpers::truncate_middle;
 use crate::types::{AppError, HtmlRes};
-use crate::AppState;
 
 #[derive(Debug)]
 struct TablePopularItem {
@@ -17,6 +17,9 @@ struct TablePopularItem {
   uniques: i64,
   count: i64,
 }
+
+type PopularColumn = (&'static str, Box<dyn Fn(&TablePopularItem) -> Markup>, PopularSort);
+type RepoColumn = (&'static str, Box<dyn Fn(&RepoTotals) -> Markup>, RepoSort);
 
 fn get_hx_target(req: &Request) -> Option<&str> {
   crate::helpers::get_header(req, "hx-target")
@@ -35,7 +38,7 @@ fn get_custom_links() -> Vec<(String, String)> {
   let links = std::env::var("GHS_CUSTOM_LINKS").unwrap_or_default();
   let links: Vec<(String, String)> = links
     .split(",")
-    .map(|x| {
+    .filter_map(|x| {
       let parts: Vec<&str> = x.split("|").collect();
       if parts.len() != 2 {
         return None;
@@ -47,8 +50,6 @@ fn get_custom_links() -> Vec<(String, String)> {
 
       Some((parts[0].to_string(), parts[1].to_string()))
     })
-    .filter(|x| x.is_some())
-    .map(|x| x.unwrap())
     .collect();
 
   links
@@ -165,7 +166,7 @@ async fn popular_table(
     PopularKind::Path => "path_table",
   };
 
-  let cols: Vec<(&str, Box<dyn Fn(&TablePopularItem) -> Markup>, PopularSort)> = vec![
+  let cols: Vec<PopularColumn> = vec![
     (name, Box::new(|x| maybe_url(&x.item)), PopularSort::Name),
     ("Views", Box::new(|x| html!((x.count.separate_with_commas()))), PopularSort::Count),
     ("Unique", Box::new(|x| html!((x.uniques.separate_with_commas()))), PopularSort::Uniques),
@@ -233,7 +234,7 @@ async fn repo_popular_tables(db: &DbClient, repo: &str, filter: &PopularFilter) 
     }
   );
 
-  return Ok(html);
+  Ok(html)
 }
 
 pub async fn repo_page(
@@ -259,9 +260,9 @@ pub async fn repo_page(
   };
 
   match get_hx_target(&req) {
-    Some("refs_table") => return Ok(popular_table(db, &repo, &PopularKind::Refs, &qs).await?),
-    Some("path_table") => return Ok(popular_table(db, &repo, &PopularKind::Path, &qs).await?),
-    Some("popular_tables") => return Ok(repo_popular_tables(&db, &repo, &qs).await?),
+    Some("refs_table") => return popular_table(db, &repo, &PopularKind::Refs, &qs).await,
+    Some("path_table") => return popular_table(db, &repo, &PopularKind::Path, &qs).await,
+    Some("popular_tables") => return repo_popular_tables(db, &repo, &qs).await,
     _ => {}
   }
 
@@ -316,7 +317,7 @@ pub async fn repo_page(
     }
 
     div class="grid" {
-      @for (title, canvas_id) in vec![("Clones", "chart_clones"), ("Views", "chart_views")] {
+      @for (title, canvas_id) in [("Clones", "chart_clones"), ("Views", "chart_views")] {
         article {
           h6 { (title) }
           canvas id=(canvas_id) {}
@@ -352,7 +353,7 @@ pub async fn index(State(state): State<Arc<AppState>>, req: Request) -> HtmlRes 
   let owners = state.get_owners().await?;
   let repos = state.get_repos_filtered(&qs).await?;
 
-  let cols: Vec<(&str, Box<dyn Fn(&RepoTotals) -> Markup>, RepoSort)> = vec![
+  let cols: Vec<RepoColumn> = vec![
     ("Name", Box::new(|x| html!(a href=(format!("/{}", x.name)) { (x.name) })), RepoSort::Name),
     ("Issues", Box::new(|x| html!((x.issues.separate_with_commas()))), RepoSort::Issues),
     ("PRs", Box::new(|x| html!((x.prs.separate_with_commas()))), RepoSort::Prs),
@@ -369,15 +370,15 @@ pub async fn index(State(state): State<Arc<AppState>>, req: Request) -> HtmlRes 
     };
 
     let mut url = format!("/?sort={}&direction={}", col, dir);
-    if let Some(q) = &qs.q {
-      if !q.is_empty() {
-        url.push_str(&format!("&q={}", q));
-      }
+    if let Some(q) = &qs.q
+      && !q.is_empty()
+    {
+      url.push_str(&format!("&q={}", q));
     }
-    if let Some(owner) = &qs.owner {
-      if !owner.is_empty() {
-        url.push_str(&format!("&owner={}", owner));
-      }
+    if let Some(owner) = &qs.owner
+      && !owner.is_empty()
+    {
+      url.push_str(&format!("&owner={}", owner));
     }
     url
   }
@@ -410,7 +411,7 @@ pub async fn index(State(state): State<Arc<AppState>>, req: Request) -> HtmlRes 
           @for repo in &repos {
             tr {
               @for col in &cols {
-                td { ((col.1)(&repo)) }
+                td { ((col.1)(repo)) }
               }
             }
           }
@@ -423,9 +424,8 @@ pub async fn index(State(state): State<Arc<AppState>>, req: Request) -> HtmlRes 
     input type="hidden" id="filter_direction" name="direction" value=(qs.direction) hx-swap-oob="true" {}
   );
 
-  match get_hx_target(&req) {
-    Some("repos_table") => return Ok(html!((table_html) (sort_inputs))),
-    _ => {}
+  if let Some("repos_table") = get_hx_target(&req) {
+    return Ok(html!((table_html)(sort_inputs)));
   }
 
   let html = html!(

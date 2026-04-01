@@ -9,7 +9,7 @@ use crate::{
 
 fn env_bool(key: &str) -> bool {
   let val = std::env::var(key).unwrap_or_else(|_| "false".to_string()).to_lowercase();
-  return val == "true" || val == "1";
+  val == "true" || val == "1"
 }
 
 pub struct AppState {
@@ -45,7 +45,7 @@ impl AppState {
   }
 
   pub async fn get_repos_filtered(&self, qs: &RepoFilter) -> Res<Vec<RepoTotals>> {
-    let repos = self.db.get_repos(&qs).await?;
+    let repos = self.db.get_repos(qs).await?;
     let repos = repos.into_iter().filter(|x| self.filter.is_included(&x.name, x.fork, x.archived));
 
     let repos: Vec<RepoTotals> = match &qs.q {
@@ -58,9 +58,7 @@ impl AppState {
 
     let repos: Vec<RepoTotals> = match &qs.owner {
       Some(owner) if !owner.is_empty() => {
-        repos.into_iter().filter(|x| {
-          x.name.split('/').next().map_or(false, |o| o == owner)
-        }).collect()
+        repos.into_iter().filter(|x| x.name.split('/').next().is_some_and(|o| o == owner)).collect()
       }
       _ => repos,
     };

@@ -4,7 +4,7 @@ use std::pin::Pin;
 use anyhow::Ok;
 use serde::{Deserialize, Serialize};
 use serde_variant::to_variant_name;
-use sqlx::{sqlite::SqliteConnectOptions, FromRow, SqlitePool};
+use sqlx::{FromRow, SqlitePool, sqlite::SqliteConnectOptions};
 
 use crate::gh_client::{PullRequest, Repo, RepoClones, RepoPopularPath, RepoReferrer, RepoViews};
 use crate::types::Res;
@@ -97,7 +97,7 @@ async fn migrate_v3(db: &SqlitePool) -> Res {
   Ok(())
 }
 
-async fn migrate<'a>(db: &'a SqlitePool) -> Res {
+async fn migrate(db: &SqlitePool) -> Res {
   type BoxFn = Box<dyn for<'a> Fn(&'a SqlitePool) -> Pin<Box<dyn Future<Output = Res> + 'a>>>;
   let migrations: Vec<BoxFn> = vec![
     Box::new(|db| Box::pin(migrate_v1(db))),
@@ -112,7 +112,7 @@ async fn migrate<'a>(db: &'a SqlitePool) -> Res {
     let mig_ver = idx as i32 + 1;
     if version < mig_ver {
       tracing::info!("running migration to v{}", mig_ver);
-      let _ = func(db).await?;
+      func(db).await?;
       let qs = format!("PRAGMA user_version = {}", mig_ver);
       sqlx::raw_sql(&qs).execute(db).await?;
     }
@@ -186,17 +186,12 @@ pub enum PopularKind {
   Path,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
   Asc,
+  #[default]
   Desc,
-}
-
-impl Default for Direction {
-  fn default() -> Self {
-    Direction::Desc
-  }
 }
 
 impl std::fmt::Display for Direction {
@@ -205,7 +200,7 @@ impl std::fmt::Display for Direction {
   }
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum RepoSort {
   Name,
@@ -217,13 +212,8 @@ pub enum RepoSort {
   #[serde(rename = "clones_count")]
   Clones,
   #[serde(rename = "views_count")]
+  #[default]
   Views,
-}
-
-impl Default for RepoSort {
-  fn default() -> Self {
-    RepoSort::Views
-  }
 }
 
 impl std::fmt::Display for RepoSort {
@@ -232,18 +222,13 @@ impl std::fmt::Display for RepoSort {
   }
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum PopularSort {
   Name,
   Count,
+  #[default]
   Uniques,
-}
-
-impl Default for PopularSort {
-  fn default() -> Self {
-    PopularSort::Uniques
-  }
 }
 
 impl std::fmt::Display for PopularSort {
@@ -271,7 +256,7 @@ pub struct PopularFilter {
 
 // MARK: DbClient
 
-const TOTAL_QUERY: &'static str = "
+const TOTAL_QUERY: &str = "
 SELECT * FROM repos r
 INNER JOIN (
 	SELECT
@@ -427,7 +412,7 @@ impl DbClient {
     Ok(())
   }
 
-  pub async fn insert_stats(&self, repo: &Repo, date: &str, prs: &Vec<PullRequest>) -> Res {
+  pub async fn insert_stats(&self, repo: &Repo, date: &str, prs: &[PullRequest]) -> Res {
     let qs = "
     INSERT INTO repo_stats AS t (repo_id, date, stars, forks, watchers, issues, prs)
     VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -441,7 +426,7 @@ impl DbClient {
 
     let _ = sqlx::query(qs)
       .bind(repo.id as i64)
-      .bind(&date)
+      .bind(date)
       .bind(repo.stargazers_count as i32)
       .bind(repo.forks_count as i32)
       .bind(repo.watchers_count as i32)
@@ -453,7 +438,7 @@ impl DbClient {
     Ok(())
   }
 
-  pub async fn insert_stars(&self, repo_id: i64, stars: &Vec<(String, u32, u32)>) -> Res {
+  pub async fn insert_stars(&self, repo_id: i64, stars: &[(String, u32, u32)]) -> Res {
     let qs = "
     INSERT INTO repo_stats AS t (repo_id, date, stars)
     VALUES ((SELECT id FROM repos WHERE id = $1), $2, $3)
@@ -462,12 +447,8 @@ impl DbClient {
     ";
 
     for (date, acc_count, _) in stars {
-      let _ = sqlx::query(qs)
-        .bind(repo_id)
-        .bind(&date)
-        .bind(acc_count.clone() as i32)
-        .execute(&self.db)
-        .await?;
+      let _ =
+        sqlx::query(qs).bind(repo_id).bind(date).bind(*acc_count as i32).execute(&self.db).await?;
     }
 
     Ok(())
@@ -517,7 +498,7 @@ impl DbClient {
     Ok(())
   }
 
-  pub async fn insert_referrers(&self, repo: &Repo, date: &str, docs: &Vec<RepoReferrer>) -> Res {
+  pub async fn insert_referrers(&self, repo: &Repo, date: &str, docs: &[RepoReferrer]) -> Res {
     let qs = "
     INSERT INTO repo_referrers AS t (repo_id, date, referrer, count, uniques)
     VALUES ($1, $2, $3, $4, $5)
@@ -529,7 +510,7 @@ impl DbClient {
     for rec in docs {
       let _ = sqlx::query(qs)
         .bind(repo.id as i64)
-        .bind(&date)
+        .bind(date)
         .bind(&rec.referrer)
         .bind(rec.count as i32)
         .bind(rec.uniques as i32)
@@ -540,7 +521,7 @@ impl DbClient {
     Ok(())
   }
 
-  pub async fn insert_paths(&self, repo: &Repo, date: &str, docs: &Vec<RepoPopularPath>) -> Res {
+  pub async fn insert_paths(&self, repo: &Repo, date: &str, docs: &[RepoPopularPath]) -> Res {
     let qs = "
     INSERT INTO repo_popular_paths AS t (repo_id, date, path, title, count, uniques)
     VALUES ($1, $2, $3, $4, $5, $6)
@@ -552,7 +533,7 @@ impl DbClient {
     for rec in docs {
       let _ = sqlx::query(qs)
         .bind(repo.id as i64)
-        .bind(&date)
+        .bind(date)
         .bind(&rec.path)
         .bind(&rec.title)
         .bind(rec.count as i32)
@@ -592,7 +573,7 @@ impl DbClient {
     Ok(())
   }
 
-  pub async fn mark_repo_hidden(&self, repos_ids: &Vec<i64>) -> Res {
+  pub async fn mark_repo_hidden(&self, repos_ids: &[i64]) -> Res {
     let ids = repos_ids.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",");
     let qs = format!("UPDATE repos SET hidden = TRUE WHERE id IN ({});", ids);
     let _ = sqlx::query(&qs).execute(&self.db).await?;

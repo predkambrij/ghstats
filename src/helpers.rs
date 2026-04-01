@@ -28,11 +28,11 @@ pub fn get_header<'a>(req: &'a Request, name: &'a str) -> Option<&'a str> {
   }
 }
 
-async fn check_hidden_repos(db: &DbClient, repos: &Vec<Repo>) -> Res {
+async fn check_hidden_repos(db: &DbClient, repos: &[Repo]) -> Res {
   let now_ids = repos.iter().map(|r| r.id as i64).collect::<Vec<_>>();
   let was_ids = db.get_repos_ids().await?;
   let hidden = was_ids.into_iter().filter(|id| !now_ids.contains(id)).collect::<Vec<_>>();
-  let _ = db.mark_repo_hidden(&hidden).await?;
+  db.mark_repo_hidden(&hidden).await?;
 
   Ok(())
 }
@@ -44,7 +44,7 @@ pub async fn update_metrics(state: Arc<AppState>) -> Res {
   let date = date.split("T").next().unwrap().to_owned() + "T00:00:00Z";
 
   let repos = state.gh.get_repos(state.include_private).await?;
-  let _ = check_hidden_repos(&state.db, &repos).await?;
+  check_hidden_repos(&state.db, &repos).await?;
 
   let repos = repos //
     .iter()
@@ -52,13 +52,9 @@ pub async fn update_metrics(state: Arc<AppState>) -> Res {
     .collect::<Vec<_>>();
 
   for repo in &repos {
-    match update_repo_metrics(&state.db, &state.gh, &repo, &date).await {
-      Err(e) => {
-        tracing::warn!("failed to update metrics for {}: {:?}", repo.full_name, e);
-        continue;
-      }
-      // Ok(_) => tracing::info!("updated metrics for {}", repo.full_name),
-      Ok(_) => {}
+    if let Err(e) = update_repo_metrics(&state.db, &state.gh, repo, &date).await {
+      tracing::warn!("failed to update metrics for {}: {:?}", repo.full_name, e);
+      continue;
     }
   }
 
@@ -77,12 +73,12 @@ async fn update_repo_metrics(db: &DbClient, gh: &GhClient, repo: &Repo, date: &s
 
   let popular_paths = gh.traffic_paths(&repo.full_name).await?;
 
-  db.insert_repo(&repo).await?;
-  db.insert_stats(&repo, date, &prs).await?;
-  db.insert_views(&repo, &views).await?;
-  db.insert_clones(&repo, &clones).await?;
-  db.insert_referrers(&repo, date, &referrers).await?;
-  db.insert_paths(&repo, date, &popular_paths).await?;
+  db.insert_repo(repo).await?;
+  db.insert_stats(repo, date, &prs).await?;
+  db.insert_views(repo, &views).await?;
+  db.insert_clones(repo, &clones).await?;
+  db.insert_referrers(repo, date, &referrers).await?;
+  db.insert_paths(repo, date, &popular_paths).await?;
 
   Ok(())
 }
@@ -105,8 +101,8 @@ pub async fn get_stars_history(gh: &GhClient, repo: &str) -> Res<Vec<(String, u3
   let mut rs: Vec<(String, u32, u32)> = Vec::with_capacity(dat.len());
   for i in 0..dat.len() {
     let (date, new_count) = &dat[i];
-    let acc_count = if i > 0 { rs[i - 1].1 + new_count } else { new_count.clone() };
-    rs.push((date.clone(), acc_count, new_count.clone()));
+    let acc_count = if i > 0 { rs[i - 1].1 + new_count } else { *new_count };
+    rs.push((date.clone(), acc_count, *new_count));
   }
 
   Ok(rs)
@@ -140,7 +136,7 @@ pub async fn sync_stars(db: &DbClient, gh: &GhClient) -> Res {
 
     // gh api rate limit is 5000 req/h, so this code will do up to 1000 req/h
     // to not block other possible user pipelines
-    pages_collected += (stars_count + 99) / 100;
+    pages_collected += stars_count.div_ceil(100);
     if pages_collected > 1000 {
       tracing::info!("sync_stars: {} pages collected, will continue next hour", pages_collected);
       break;
@@ -223,7 +219,7 @@ impl GhsFilter {
       return false;
     }
 
-    for (flag, rules) in vec![(false, &self.exclude_repos), (true, &self.include_repos)] {
+    for (flag, rules) in [(false, &self.exclude_repos), (true, &self.include_repos)] {
       for rule in rules {
         if rule == &repo {
           return flag;
@@ -251,7 +247,7 @@ impl GhsFilter {
       return false;
     }
 
-    return self.default_all;
+    self.default_all
   }
 }
 

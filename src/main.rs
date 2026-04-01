@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::{response::IntoResponse, routing::get, Router};
+use axum::{Router, response::IntoResponse, routing::get};
 use db_client::RepoFilter;
 use reqwest::StatusCode;
 use state::AppState;
@@ -35,11 +35,10 @@ async fn start_cron(state: Arc<AppState>) -> Res {
 
   // if new db, update metrics immediately
   let repos = state.db.get_repos(&RepoFilter::default()).await?;
-  if repos.len() == 0 {
+  if repos.is_empty() {
     tracing::info!("no repos found, load initial metrics");
-    match helpers::update_metrics(state.clone()).await {
-      Err(e) => tracing::error!("failed to update metrics: {:?}", e),
-      Ok(_) => {}
+    if let Err(e) = helpers::update_metrics(state.clone()).await {
+      tracing::error!("failed to update metrics: {:?}", e);
     }
   } else {
     state.db.update_deltas().await?;
@@ -57,9 +56,8 @@ async fn start_cron(state: Arc<AppState>) -> Res {
     Box::pin(async move {
       let _ = check_new_release(state.clone()).await;
 
-      match helpers::update_metrics(state.clone()).await {
-        Err(e) => tracing::error!("failed to update metrics: {:?}", e),
-        Ok(_) => {}
+      if let Err(e) = helpers::update_metrics(state.clone()).await {
+        tracing::error!("failed to update metrics: {:?}", e);
       }
     })
   })?;
@@ -99,14 +97,9 @@ async fn main() -> Res {
 
   let cron_state = state.clone();
   tokio::spawn(async move {
-    loop {
-      match start_cron(cron_state.clone()).await {
-        Err(e) => {
-          tracing::error!("failed to start cron: {:?}", e);
-          tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-        }
-        Ok(_) => break,
-      }
+    while let Err(e) = start_cron(cron_state.clone()).await {
+      tracing::error!("failed to start cron: {:?}", e);
+      tokio::time::sleep(std::time::Duration::from_secs(10)).await;
     }
   });
 

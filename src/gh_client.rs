@@ -1,10 +1,10 @@
 use std::{time::Duration, vec};
 
 use reqwest::{
-  header::{HeaderMap, HeaderValue},
   RequestBuilder,
+  header::{HeaderMap, HeaderValue},
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::types::Res;
 
@@ -105,10 +105,13 @@ impl GhClient {
     let mut page = 1;
 
     loop {
-      let req = req.try_clone().unwrap();
-      let req = req.query(&[("per_page", &per_page.to_string())]);
-      let req = req.query(&[("page", &page.to_string())]);
-      let rep = req.send().await?.error_for_status()?;
+      let mut req = req.try_clone().unwrap().build()?;
+      {
+        let mut query = req.url_mut().query_pairs_mut();
+        query.append_pair("per_page", &per_page.to_string());
+        query.append_pair("page", &page.to_string());
+      }
+      let rep = self.client.execute(req).await?.error_for_status()?;
 
       let cur = match rep.headers().get("link") {
         Some(l) => l.to_str().unwrap().to_string(),
@@ -186,6 +189,6 @@ impl GhClient {
     let req = self.client.get(url).header("Accept", "application/vnd.github.v3.star+json");
 
     let dat: Vec<RepoStar> = self.with_pagination(req).await?;
-    return Ok(dat);
+    Ok(dat)
   }
 }

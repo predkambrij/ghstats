@@ -4,7 +4,7 @@ mod html;
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use axum::{extract::Request, middleware::Next, response::IntoResponse, routing::get, Router};
+use axum::{Router, extract::Request, middleware::Next, response::IntoResponse, routing::get};
 use reqwest::Method;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -27,14 +27,12 @@ async fn check_api_token(
 pub fn api_routes() -> Router<Arc<AppState>> {
   let cors = CorsLayer::new().allow_methods([Method::GET]).allow_origin(Any);
 
-  let router = Router::new()
+  Router::new()
     .route("/repos", get(api::api_get_repos))
     .layer(axum::middleware::from_fn(check_api_token))
-    .layer(cors);
-
-  router
+    .layer(cors)
 }
 
 pub fn html_routes() -> Router<Arc<AppState>> {
-  Router::new().route("/", get(html::index)).route("/:owner/:repo", get(html::repo_page))
+  Router::new().route("/", get(html::index)).route("/{owner}/{repo}", get(html::repo_page))
 }
