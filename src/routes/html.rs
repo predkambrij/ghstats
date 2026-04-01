@@ -349,6 +349,7 @@ pub async fn repo_page(
 pub async fn index(State(state): State<Arc<AppState>>, req: Request) -> HtmlRes {
   // let qs: Query<HashMap<String, String>> = Query::try_from_uri(req.uri())?;
   let qs: Query<RepoFilter> = Query::try_from_uri(req.uri())?;
+  let owners = state.get_owners().await?;
   let repos = state.get_repos_filtered(&qs).await?;
 
   let cols: Vec<(&str, Box<dyn Fn(&RepoTotals) -> Markup>, RepoSort)> = vec![
@@ -367,10 +368,24 @@ pub async fn index(State(state): State<Arc<AppState>>, req: Request) -> HtmlRes 
       false => "desc",
     };
 
-    format!("/?sort={}&direction={}", col, dir)
+    let mut url = format!("/?sort={}&direction={}", col, dir);
+    if let Some(q) = &qs.q {
+      if !q.is_empty() {
+        url.push_str(&format!("&q={}", q));
+      }
+    }
+    if let Some(owner) = &qs.owner {
+      if !owner.is_empty() {
+        url.push_str(&format!("&owner={}", owner));
+      }
+    }
+    url
   }
 
-  let html = html!(
+  let cur_q = qs.q.clone().unwrap_or_default();
+  let cur_owner = qs.owner.clone().unwrap_or_default();
+
+  let table_html = html!(
       table id="repos_table" {
         thead {
           tr {
@@ -403,10 +418,50 @@ pub async fn index(State(state): State<Arc<AppState>>, req: Request) -> HtmlRes 
       }
   );
 
+  let sort_inputs = html!(
+    input type="hidden" id="filter_sort" name="sort" value=(qs.sort) hx-swap-oob="true" {}
+    input type="hidden" id="filter_direction" name="direction" value=(qs.direction) hx-swap-oob="true" {}
+  );
+
   match get_hx_target(&req) {
-    Some("repos_table") => return Ok(html),
+    Some("repos_table") => return Ok(html!((table_html) (sort_inputs))),
     _ => {}
   }
+
+  let html = html!(
+    div class="flex-row gap-4 mb-0" {
+      input type="hidden" id="filter_sort" name="sort" value=(qs.sort) {}
+      input type="hidden" id="filter_direction" name="direction" value=(qs.direction) {}
+
+      @if owners.len() > 1 {
+        select name="owner" class="mb-0"
+          style="width: auto; height: calc(1.5em + 0.5rem + 2px); padding: 0.25rem 2rem 0.25rem 0.5rem; background-position: center right 0.25rem; background-size: 0.75rem auto;"
+          hx-get="/"
+          hx-target="#repos_table"
+          hx-swap="outerHTML"
+          hx-include="[name='q'], #filter_sort, #filter_direction"
+        {
+          option value="" selected[cur_owner.is_empty()] { "All owners" }
+          @for owner in &owners {
+            option value=(owner) selected[*owner == cur_owner] { (owner) }
+          }
+        }
+      }
+
+      input type="search" name="q" value=(cur_q)
+        placeholder="Search repos…"
+        class="mb-0"
+        style="padding: 0.25rem 0.5rem 0.25rem 2.75rem; height: auto;"
+        hx-get="/"
+        hx-trigger="keyup changed delay:300ms, search"
+        hx-target="#repos_table"
+        hx-swap="outerHTML"
+        hx-include="[name='owner'], #filter_sort, #filter_direction"
+      {}
+    }
+
+    (table_html)
+  );
 
   Ok(base(&state, vec![], html))
 }

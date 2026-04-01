@@ -47,7 +47,37 @@ impl AppState {
   pub async fn get_repos_filtered(&self, qs: &RepoFilter) -> Res<Vec<RepoTotals>> {
     let repos = self.db.get_repos(&qs).await?;
     let repos = repos.into_iter().filter(|x| self.filter.is_included(&x.name, x.fork, x.archived));
-    let repos = repos.collect::<Vec<_>>();
+
+    let repos: Vec<RepoTotals> = match &qs.q {
+      Some(q) if !q.is_empty() => {
+        let q = q.to_lowercase();
+        repos.filter(|x| x.name.to_lowercase().contains(&q)).collect()
+      }
+      _ => repos.collect(),
+    };
+
+    let repos: Vec<RepoTotals> = match &qs.owner {
+      Some(owner) if !owner.is_empty() => {
+        repos.into_iter().filter(|x| {
+          x.name.split('/').next().map_or(false, |o| o == owner)
+        }).collect()
+      }
+      _ => repos,
+    };
+
     Ok(repos)
+  }
+
+  pub async fn get_owners(&self) -> Res<Vec<String>> {
+    let filter = RepoFilter::default();
+    let repos = self.db.get_repos(&filter).await?;
+    let mut owners: Vec<String> = repos
+      .iter()
+      .filter(|x| self.filter.is_included(&x.name, x.fork, x.archived))
+      .filter_map(|x| x.name.split('/').next().map(|s| s.to_string()))
+      .collect();
+    owners.sort();
+    owners.dedup();
+    Ok(owners)
   }
 }

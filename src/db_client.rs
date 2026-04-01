@@ -257,6 +257,8 @@ impl std::fmt::Display for PopularSort {
 pub struct RepoFilter {
   pub sort: RepoSort,
   pub direction: Direction,
+  pub q: Option<String>,
+  pub owner: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
