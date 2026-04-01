@@ -1,3 +1,17 @@
+## v0.8.0 – 2026-04-01
+
+### Features
+- Added search and owner filtering to the repositories table (#23, by @larsborn)
+- Improved repo metrics UI layout
+
+### Improvements
+- Simplified Docker image setup with fewer dependencies
+- Migrated to Rust 2024 edition with refreshed dependencies
+
+**Full Changelog**: https://github.com/vladkens/ghstats/compare/v0.7.1...v0.8.0
+
+---
+
 ## v0.7.1 – 2024-12-18
 
 ### Fixes
