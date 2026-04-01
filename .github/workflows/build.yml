@@ -29,6 +29,16 @@ jobs:
       - run: cargo check --release --locked
       - run: cargo test
 
+      - name: Check Cargo.toml version matches tag
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          CARGO_VERSION="v$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
+          if [ "$TAG" != "$CARGO_VERSION" ]; then
+            echo "Error: tag ${TAG} does not match Cargo.toml version ${CARGO_VERSION}"
+            exit 1
+          fi
+
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
@@ -63,17 +73,21 @@ jobs:
             ghcr.io/${{ github.repository }}:${{ github.ref_name }}
             ghcr.io/${{ github.repository }}:latest
 
-      - name: Generate a changelog
+      - name: Extract changelog entry
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        id: git-cliff
-        uses: orhun/git-cliff-action@v4
-        with:
-          args: --latest
+        run: |
+          VERSION="${{ github.ref_name }}"
+          NOTES=$(awk "/^## ${VERSION}/{found=1; next} /^## /{found=0} found" changelog.md | sed '/^---$/d')
+          if [ -z "$NOTES" ]; then
+            echo "Error: no changelog entry found for ${VERSION}"
+            exit 1
+          fi
+          echo "$NOTES" > release_notes.txt
 
       - name: Create Github Release
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         uses: softprops/action-gh-release@v2
         with:
-          body: ${{ steps.git-cliff.outputs.content }}
+          body_path: release_notes.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

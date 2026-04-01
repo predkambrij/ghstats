@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Query, Request, State};
+use axum::extract::{OriginalUri, Query, State};
 
 use crate::AppState;
 use crate::db_client::{RepoFilter, RepoTotals};
@@ -17,8 +17,11 @@ pub struct ReposList {
   items: Vec<RepoTotals>,
 }
 
-pub async fn api_get_repos(State(state): State<Arc<AppState>>, req: Request) -> JsonRes<ReposList> {
-  let qs: Query<RepoFilter> = Query::try_from_uri(req.uri())?;
+pub async fn api_get_repos(
+  State(state): State<Arc<AppState>>,
+  OriginalUri(uri): OriginalUri,
+) -> JsonRes<ReposList> {
+  let qs: Query<RepoFilter> = Query::try_from_uri(&uri)?;
   let repos = state.get_repos_filtered(&qs).await?;
 
   let repos_list = ReposList {

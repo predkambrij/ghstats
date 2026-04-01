@@ -16,15 +16,89 @@ const mouseLinePlugin = {
   },
 };
 
+const parseMetricDate = value => {
+  const [year, month, day] = value.split('T')[0].split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
+};
+
+const formatDate = date =>
+  `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+
+const getWeekStart = date => {
+  const start = new Date(date);
+  const day = start.getUTCDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  start.setUTCDate(start.getUTCDate() + diff);
+  return start;
+};
+
+const getBucketKind = metrics => {
+  if (metrics.length <= 1) return 'day';
+  const first = parseMetricDate(metrics[0].date);
+  const last = parseMetricDate(metrics.at(-1).date);
+  const rangeDays = Math.ceil((last - first) / 86400000);
+
+  if (rangeDays <= 90) return 'day';
+  if (rangeDays <= 365) return 'week';
+  return 'month';
+};
+
+const groupMetrics = (metrics, uniqueCol, countCol) => {
+  const bucketKind = getBucketKind(metrics);
+  const buckets = new Map();
+
+  for (const metric of metrics) {
+    const date = parseMetricDate(metric.date);
+    let bucketStart;
+    let label;
+
+    if (bucketKind === 'month') {
+      bucketStart = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+      label = `${bucketStart.getUTCFullYear()}-${String(bucketStart.getUTCMonth() + 1).padStart(2, '0')}`;
+    } else if (bucketKind === 'week') {
+      bucketStart = getWeekStart(date);
+      label = formatDate(bucketStart);
+    } else {
+      bucketStart = date;
+      label = formatDate(bucketStart);
+    }
+
+    const key = formatDate(bucketStart);
+    const current = buckets.get(key) ?? {
+      x: bucketStart,
+      label,
+      title: label,
+      unique: 0,
+      count: 0,
+    };
+
+    current.unique += metric[uniqueCol];
+    current.count += metric[countCol];
+    buckets.set(key, current);
+  }
+
+  const items = Array.from(buckets.values()).sort((a, b) => a.x - b.x);
+  if (bucketKind === 'week') {
+    for (const item of items) {
+      const bucketEnd = new Date(item.x);
+      bucketEnd.setUTCDate(bucketEnd.getUTCDate() + 6);
+      item.title = `${formatDate(item.x)} to ${formatDate(bucketEnd)}`;
+    }
+  }
+
+  return { bucketKind, items };
+};
+
 const renderMetrics = (canvasId, metrics, uniqueCol, countCol) => {
   const ctx = document.getElementById(canvasId);
+  const grouped = groupMetrics(metrics, uniqueCol, countCol);
   new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: metrics.map(x => x.date.split('T')[0]),
+      labels: grouped.items.map(x => x.x),
       datasets: [
-        { label: 'Unique', data: metrics.map(x => x[uniqueCol]), borderWidth: 0, borderRadius: 4 },
-        { label: 'Count', data: metrics.map(x => x[countCol]), borderWidth: 0, borderRadius: 4 },
+        { label: 'Unique', data: grouped.items.map(x => x.unique), borderWidth: 0, borderRadius: 4 },
+        { label: 'Count', data: grouped.items.map(x => x.count), borderWidth: 0, borderRadius: 4 },
       ],
     },
     options: {
@@ -37,7 +111,12 @@ const renderMetrics = (canvasId, metrics, uniqueCol, countCol) => {
       plugins: {
         legend: { display: false },
         // title: { display: true, text: uniqueCol.split('_')[0].toUpperCase() }
-        tooltip: { intersect: false },
+        tooltip: {
+          intersect: false,
+          callbacks: {
+            title: items => grouped.items[items[0].dataIndex]?.title ?? '',
+          },
+        },
       },
     },
     plugins: [mouseLinePlugin],

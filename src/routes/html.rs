@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{OriginalUri, Path, Query, State};
+use axum::http::HeaderMap;
 use maud::{Markup, PreEscaped, html};
 use thousands::Separable;
+use url::form_urlencoded::Serializer;
 
 use crate::AppState;
 use crate::db_client::{
@@ -18,11 +20,12 @@ struct TablePopularItem {
   count: i64,
 }
 
-type PopularColumn = (&'static str, Box<dyn Fn(&TablePopularItem) -> Markup>, PopularSort);
-type RepoColumn = (&'static str, Box<dyn Fn(&RepoTotals) -> Markup>, RepoSort);
+type PopularColumn =
+  (&'static str, Box<dyn Fn(&TablePopularItem) -> Markup + Send + Sync>, PopularSort);
+type RepoColumn = (&'static str, Box<dyn Fn(&RepoTotals) -> Markup + Send + Sync>, RepoSort);
 
-fn get_hx_target(req: &Request) -> Option<&str> {
-  crate::helpers::get_header(req, "hx-target")
+fn get_hx_target(headers: &HeaderMap) -> Option<&str> {
+  headers.get("hx-target").and_then(|value| value.to_str().ok())
 }
 
 fn maybe_url(item: &(String, Option<String>)) -> Markup {
@@ -32,6 +35,42 @@ fn maybe_url(item: &(String, Option<String>)) -> Markup {
     Some(url) => html!(a href=(url) { (truncate_middle(name, 40)) }),
     None => html!(span { (name) }),
   }
+}
+
+fn compact_number(value: i32) -> String {
+  let abs = value.abs() as f64;
+  let (scaled, suffix) = if abs >= 1_000_000_000.0 {
+    (value as f64 / 1_000_000_000.0, "b")
+  } else if abs >= 1_000_000.0 {
+    (value as f64 / 1_000_000.0, "m")
+  } else if abs >= 1_000.0 {
+    (value as f64 / 1_000.0, "k")
+  } else {
+    return value.separate_with_commas();
+  };
+
+  let rounded = (scaled * 10.0).round() / 10.0;
+  if (rounded.fract() - 0.0).abs() < f64::EPSILON {
+    format!("{rounded:.0}{suffix}")
+  } else {
+    format!("{rounded:.1}{suffix}")
+  }
+}
+
+fn totals_card(title: &str, unique: i32, total: i32) -> Markup {
+  let full_value = format!("{} / {}", unique.separate_with_commas(), total.separate_with_commas());
+  html!(
+    article class="flex-col" style="padding: 0.75rem;" {
+      h6 class="mb-0" { (title) }
+      h4 class="mb-0 grow flex-row items-center"
+        title=(full_value)
+        style="max-width: 100%; overflow: hidden; white-space: nowrap; line-height: 1; font-size: clamp(1.2rem, 1.25vw, 1.5rem);" {
+        (compact_number(unique))
+        " / "
+        (compact_number(total))
+      }
+    }
+  )
 }
 
 fn get_custom_links() -> Vec<(String, String)> {
@@ -240,10 +279,11 @@ async fn repo_popular_tables(db: &DbClient, repo: &str, filter: &PopularFilter) 
 pub async fn repo_page(
   State(state): State<Arc<AppState>>,
   Path((owner, repo)): Path<(String, String)>,
-  req: Request,
+  OriginalUri(uri): OriginalUri,
+  headers: HeaderMap,
 ) -> HtmlRes {
   let repo = format!("{}/{}", owner, repo);
-  let mut qs: Query<PopularFilter> = Query::try_from_uri(req.uri())?;
+  let mut qs: Query<PopularFilter> = Query::try_from_uri(&uri)?;
   let db = &state.db;
 
   let periods = vec![
@@ -255,11 +295,11 @@ pub async fn repo_page(
   ];
 
   qs.period = match periods.iter().all(|x| x.0 != qs.period) {
-    true => 7,
+    true => 30,
     false => qs.period,
   };
 
-  match get_hx_target(&req) {
+  match get_hx_target(&headers) {
     Some("refs_table") => return popular_table(db, &repo, &PopularKind::Refs, &qs).await,
     Some("path_table") => return popular_table(db, &repo, &PopularKind::Path, &qs).await,
     Some("popular_tables") => return repo_popular_tables(db, &repo, &qs).await,
@@ -291,22 +331,8 @@ pub async fn repo_page(
         }
 
         div class="grid" {
-          article class="flex-col" {
-            h6 class="mb-0" { "Total Clones" }
-            h4 class="mb-0 grow flex-row items-center" {
-              (totals.clones_uniques.separate_with_commas())
-              " / "
-              (totals.clones_count.separate_with_commas())
-            }
-          }
-          article class="flex-col" {
-            h6 class="mb-0" { "Total Views" }
-            h4 class="mb-0 grow flex-row items-center" {
-              (totals.views_uniques.separate_with_commas())
-              " / "
-              (totals.views_count.separate_with_commas())
-            }
-          }
+          (totals_card("Clones (U/T)", totals.clones_uniques, totals.clones_count))
+          (totals_card("Views (U/T)", totals.views_uniques, totals.views_count))
         }
       }
 
@@ -347,11 +373,15 @@ pub async fn repo_page(
 }
 
 // https://docs.rs/axum/latest/axum/extract/index.html#common-extractors
-pub async fn index(State(state): State<Arc<AppState>>, req: Request) -> HtmlRes {
-  // let qs: Query<HashMap<String, String>> = Query::try_from_uri(req.uri())?;
-  let qs: Query<RepoFilter> = Query::try_from_uri(req.uri())?;
-  let owners = state.get_owners().await?;
+pub async fn index(
+  State(state): State<Arc<AppState>>,
+  OriginalUri(uri): OriginalUri,
+  headers: HeaderMap,
+) -> HtmlRes {
+  // let qs: Query<HashMap<String, String>> = Query::try_from_uri(&uri)?;
+  let qs: Query<RepoFilter> = Query::try_from_uri(&uri)?;
   let repos = state.get_repos_filtered(&qs).await?;
+  let owners = state.get_owners().await?;
 
   let cols: Vec<RepoColumn> = vec![
     ("Name", Box::new(|x| html!(a href=(format!("/{}", x.name)) { (x.name) })), RepoSort::Name),
@@ -369,18 +399,20 @@ pub async fn index(State(state): State<Arc<AppState>>, req: Request) -> HtmlRes 
       false => "desc",
     };
 
-    let mut url = format!("/?sort={}&direction={}", col, dir);
+    let mut query = Serializer::new(String::new());
+    query.append_pair("sort", &col.to_string());
+    query.append_pair("direction", dir);
     if let Some(q) = &qs.q
       && !q.is_empty()
     {
-      url.push_str(&format!("&q={}", q));
+      query.append_pair("q", q);
     }
     if let Some(owner) = &qs.owner
       && !owner.is_empty()
     {
-      url.push_str(&format!("&owner={}", owner));
+      query.append_pair("owner", owner);
     }
-    url
+    format!("/?{}", query.finish())
   }
 
   let cur_q = qs.q.clone().unwrap_or_default();
@@ -424,7 +456,7 @@ pub async fn index(State(state): State<Arc<AppState>>, req: Request) -> HtmlRes 
     input type="hidden" id="filter_direction" name="direction" value=(qs.direction) hx-swap-oob="true" {}
   );
 
-  if let Some("repos_table") = get_hx_target(&req) {
+  if let Some("repos_table") = get_hx_target(&headers) {
     return Ok(html!((table_html)(sort_inputs)));
   }
 
