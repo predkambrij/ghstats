@@ -43,6 +43,16 @@ services:
       - ./data:/app/data
 ```
 
+### Build locally with Docker Compose
+
+This repository includes a `docker-compose.yml` that builds the local `Dockerfile`, loads variables from `.env`, and stores SQLite data in a Docker named volume.
+
+```sh
+docker compose up --build -d
+```
+
+By default, the local compose setup exposes the app at http://127.0.0.1:8080. You can change the host port with `HOST_PORT` in `.env`.
+
 ### Github token generation
 
 `ghstats` needs Github Token to collect traffic data from API. Token can be obtained with following steps:
