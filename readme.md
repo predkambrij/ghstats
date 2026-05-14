@@ -67,6 +67,16 @@ All public repositories that can be accessed are saved. If you need more detaile
 
 You can to change default host / port app will run on with `HOST` (default `0.0.0.0`) and `PORT` (default `8080`) environment variables.
 
+### Metrics schedule
+
+You can change how often metrics are pulled with the `GHS_CRON_SCHEDULE` environment variable. It uses the six-field cron format from `tokio-cron-scheduler`. The default is `0 59 * * * *`, which runs at minute 59 of every hour.
+
+For example, to pull metrics once per day at 00:59:
+
+```sh
+GHS_CRON_SCHEDULE="0 59 0 * * *"
+```
+
 ### Custom links
 
 If you plan to display your stats publicly, there is an option to add custom links to the header via environment variables, e.g.:

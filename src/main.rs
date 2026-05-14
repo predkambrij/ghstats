@@ -16,6 +16,8 @@ mod state;
 mod types;
 mod utils;
 
+const DEFAULT_METRICS_CRON: &str = "0 59 * * * *";
+
 async fn check_new_release(state: Arc<AppState>) -> Res {
   let tag = state.gh.get_latest_release_ver("vladkens/ghstats").await?;
   let mut last_tag = state.last_release.lock().unwrap();
@@ -29,6 +31,9 @@ async fn check_new_release(state: Arc<AppState>) -> Res {
 
 async fn start_cron(state: Arc<AppState>) -> Res {
   use tokio_cron_scheduler::{Job, JobScheduler};
+
+  let cron_schedule = std::env::var("GHS_CRON_SCHEDULE").unwrap_or(DEFAULT_METRICS_CRON.to_string());
+  tracing::info!("metrics cron schedule: {}", cron_schedule);
 
   // note: for development, uncomment to update metrics on start
   helpers::update_metrics(state.clone()).await?;
@@ -50,8 +55,7 @@ async fn start_cron(state: Arc<AppState>) -> Res {
   // https://docs.github.com/en/repositories/viewing-activity-and-data-for-your-repository/viewing-traffic-to-a-repository
   // >> Full clones and visitor information update hourly, while referring sites and popular content sections update daily.
 
-  // last minute of every hour
-  let job = Job::new_async("0 59 * * * *", move |_, _| {
+  let job = Job::new_async(cron_schedule.as_str(), move |_, _| {
     let state = state.clone();
     Box::pin(async move {
       let _ = check_new_release(state.clone()).await;
